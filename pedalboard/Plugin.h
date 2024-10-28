@@ -39,6 +39,13 @@ public:
   virtual void prepare(const juce::dsp::ProcessSpec &spec) = 0;
 
   /**
+   * Prepare the data structures that will be necessary for this plugin to
+   * process audio at the provided sample rate, maximum block size, and number
+   * of channels.
+   */
+  virtual void prepareSidechain(const juce::dsp::ProcessSpec &spec) {}
+
+  /**
    * Process a single buffer of audio through this plugin.
    * Returns the number of samples that were output.
    *
