@@ -144,6 +144,101 @@ juce::AudioBuffer<T> copyPyArrayIntoJuceBuffer(
   return ioBuffer;
 }
 
+template <typename T>
+juce::AudioBuffer<T> copyPyArraysIntoJuceBuffer(
+    const py::array_t<T, py::array::c_style> inputArray,
+    const py::array_t<T, py::array::c_style> sidechainArray,
+    std::optional<ChannelLayout> providedChannelLayout = {}) {
+  // Numpy/Librosa convention is (num_samples, num_channels)
+  py::buffer_info inputInfo = inputArray.request();
+  py::buffer_info sidechainInfo = sidechainArray.request();
+
+  unsigned int numChannels = 0;
+  unsigned int numSamples = 0;
+
+  ChannelLayout inputChannelLayout;
+  if (providedChannelLayout) {
+    inputChannelLayout = *providedChannelLayout;
+  } else {
+    inputChannelLayout = detectChannelLayout(inputArray);
+  }
+
+  if (inputInfo.ndim == 1) {
+    numSamples = inputInfo.shape[0];
+    numChannels = 1;
+  } else if (inputInfo.ndim == 2) {
+    // Try to auto-detect the channel layout from the shape
+    switch (inputChannelLayout) {
+    case ChannelLayout::NotInterleaved:
+      numSamples = inputInfo.shape[1];
+      numChannels = inputInfo.shape[0];
+      break;
+    case ChannelLayout::Interleaved:
+      numSamples = inputInfo.shape[0];
+      numChannels = inputInfo.shape[1];
+      break;
+    default:
+      throw std::runtime_error("Unable to determine shape of audio input!");
+    }
+  } else {
+    throw std::runtime_error("Number of input dimensions must be 1 or 2 (got " +
+                             std::to_string(inputInfo.ndim) + ").");
+  }
+  std::cout << "numChannels: " << numChannels << std::endl;
+  std::cout << "numSamples: " << numSamples << std::endl;
+  std::cout << "numChannels Sidechain: " << sidechainInfo.shape[0] << std::endl;
+  std::cout << "numSamples Sidechain: " << sidechainInfo.shape[1] << std::endl;
+  std::string printChannelLayout = (inputChannelLayout == ChannelLayout::Interleaved) ? "Interleaved" : "Non Interleaved";
+  std::cout << "Channel Layout: " << printChannelLayout << std::endl;
+  // We are assuming InputArray and Sidechain array have same dimensions. we need to handle for cases where that is not the case.
+  juce::AudioBuffer<T> ioBuffer(numChannels * 2, numSamples);
+  std::cout << "ioBuffer.getNumChannels(): " << ioBuffer.getNumChannels() << std::endl;
+  // Depending on the input channel layout, we need to copy data
+  // differently. This loop is duplicated here to move the if statement
+  // outside of the tight loop, as we don't need to re-check that the input
+  // channel is still the same on every iteration of the loop.
+  switch (inputChannelLayout) {
+  case ChannelLayout::Interleaved:
+    for (unsigned int i = 0; i < numChannels; i++) {
+      std::cout << "Processing for Interleaved Layout for input Channel " << i << std::endl;
+      T *channelBuffer = ioBuffer.getWritePointer(i);
+      // We're de-interleaving the data here, so we can't use copyFrom.
+      for (unsigned int j = 0; j < numSamples; j++) {
+        channelBuffer[j] = static_cast<T *>(inputInfo.ptr)[j * numChannels + i];
+      }
+    }
+    for (unsigned int i = 0; i < numChannels; i++) {
+      std::cout << "Processing for Interleaved Layout for sidechain Channel " << i << std::endl;
+      T *channelBuffer = ioBuffer.getWritePointer(i + numChannels);
+      // We're de-interleaving the data here, so we can't use copyFrom.
+      for (unsigned int j = 0; j < numSamples; j++) {
+        channelBuffer[j] = static_cast<T *>(sidechainInfo.ptr)[j * numChannels + i];
+      }
+    }
+    break;
+  case ChannelLayout::NotInterleaved:
+    if (sidechainInfo.ndim != inputInfo.ndim || sidechainInfo.shape[0] != inputInfo.shape[0] || sidechainInfo.shape[1] != inputInfo.shape[1]) {
+      throw std::runtime_error("Input and sidechain arrays must have the same dimensions.");
+    }
+
+    for (unsigned int i = 0; i < numChannels; i++) {
+      std::cout << "Processing for NonInterleaved Layout for Input Channel " << i << std::endl;
+      ioBuffer.copyFrom(
+          i, 0, static_cast<T *>(inputInfo.ptr) + (numSamples * i), numSamples);
+    }
+    for (unsigned int i = 0; i < numChannels; i++) {
+      std::cout << "Processing for NonInterleaved Layout for Sidechain Channel " << i << std::endl;
+      ioBuffer.copyFrom(
+          i + numChannels, 0, static_cast<T *>(sidechainInfo.ptr) + (numSamples * i), numSamples);
+    }
+    break;
+  default:
+    throw std::runtime_error("Internal error: got unexpected channel layout.");
+  }
+
+  return ioBuffer;
+}
+
 /**
  * Convert a Python array into a const JUCE AudioBuffer, avoiding copying the
  * data if provided in the appropriate format.
