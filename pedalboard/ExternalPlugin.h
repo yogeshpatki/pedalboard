@@ -875,6 +875,79 @@ public:
           " output channels.)");
     }
   }
+  void setNumChannelsSidechain(int numChannels) {
+    if (!pluginInstance)
+      return;
+
+    if (numChannels == 0)
+      return;
+
+    auto mainInputBus = pluginInstance->getBus(true, 0);
+    auto auxInputBus = pluginInstance->getBus(true, 1);
+    auto mainOutputBus = pluginInstance->getBus(false, 0);
+    std::cout << "mainInputBus: " << mainInputBus->getNumberOfChannels() << std::endl;
+    std::cout << "mainInputBus Enabled: " << mainInputBus->isEnabled() << std::endl;
+    std::cout << "auxInputBus: " << auxInputBus->getNumberOfChannels() << std::endl;
+    std::cout << "auxInputBus: Enabled: " << auxInputBus->isEnabled() << std::endl;
+    std::cout << "mainOutputBus: " << mainOutputBus->getNumberOfChannels() << std::endl;
+    auxInputBus->enable(true);
+    auxInputBus->setNumberOfChannels(mainInputBus->getNumberOfChannels());
+    // Try to disable all non-main input buses if possible:
+    for (int i = 2; i < pluginInstance->getBusCount(true); i++) {
+      auto *bus = pluginInstance->getBus(true, i);
+      if (bus->isNumberOfChannelsSupported(0))
+        bus->enable(false);
+    }
+
+    // ...and all non-main output buses too:
+    for (int i = 1; i < pluginInstance->getBusCount(false); i++) {
+      auto *bus = pluginInstance->getBus(false, i);
+      if (bus->isNumberOfChannelsSupported(0))
+        bus->enable(false);
+    }
+
+    if ((!mainInputBus || !auxInputBus || 
+        mainInputBus->getNumberOfChannels() + auxInputBus->getNumberOfChannels() == numChannels) &&
+        mainOutputBus->getNumberOfChannels() == mainInputBus->getNumberOfChannels()) {
+      return;
+    }
+
+    // Cache these values in case the plugin fails to update:
+    auto previousInputChannelCount =
+        mainInputBus ? mainInputBus->getNumberOfChannels() : 0;
+    auto previousOutputChannelCount = mainOutputBus->getNumberOfChannels();
+    std::cout << "previousInputChannelCount: " << previousInputChannelCount << std::endl;
+    std::cout << "previousOutputChannelCount: " << previousOutputChannelCount << std::endl;
+
+    // Try to change the input and output bus channel counts...
+    if (mainInputBus)
+      mainInputBus->setNumberOfChannels(numChannels);
+    mainOutputBus->setNumberOfChannels(numChannels);
+    std::cout << "Main InputBus Count: " << mainInputBus->getNumberOfChannels() << std::endl;
+    std::cout << "Main OututBus Count: " << mainOutputBus->getNumberOfChannels() << std::endl;
+
+    // If, post-reload, we still can't use the right number of channels, let's
+    // conclude the plugin doesn't allow this channel count.
+    if ((!mainInputBus || mainInputBus->getNumberOfChannels() != numChannels) ||
+        mainOutputBus->getNumberOfChannels() != numChannels) {
+
+      // Reset the bus configuration to what it was before, so we don't
+      // leave one of the buses smaller than the other:
+      if (mainInputBus)
+        mainInputBus->setNumberOfChannels(previousInputChannelCount);
+      mainOutputBus->setNumberOfChannels(previousOutputChannelCount);
+
+      throw std::invalid_argument(
+          "Plugin '" + pluginInstance->getName().toStdString() +
+          "' does not support " + std::to_string(numChannels) +
+          "-channel output. (Main bus currently expects " +
+          std::to_string(mainInputBus ? mainInputBus->getNumberOfChannels()
+                                      : 0) +
+          " input channels and " +
+          std::to_string(mainOutputBus->getNumberOfChannels()) +
+          " output channels.)");
+    }
+  }
 
   const juce::String getName() const {
     return pluginInstance ? pluginInstance->getName() : "<unknown>";
@@ -1135,6 +1208,33 @@ public:
       if (lastSpec.numChannels != spec.numChannels) {
         pluginInstance->releaseResources();
         setNumChannels(spec.numChannels);
+      }
+
+      pluginInstance->setNonRealtime(true);
+      pluginInstance->prepareToPlay(spec.sampleRate, spec.maximumBlockSize);
+
+      lastSpec = spec;
+    }
+  }
+
+  /**
+   * prepare() is called on every render call, regardless of if the plugin has
+   * been reset.
+   */
+  void prepareSidechain(const juce::dsp::ProcessSpec &spec) override {
+    if (!pluginInstance) {
+      return;
+    }
+
+    if (lastSpec.sampleRate != spec.sampleRate ||
+        lastSpec.maximumBlockSize < spec.maximumBlockSize ||
+        lastSpec.numChannels != spec.numChannels) {
+
+      // Changing the number of channels requires releaseResources to be
+      // called:
+      if (lastSpec.numChannels != spec.numChannels) {
+        pluginInstance->releaseResources();
+        setNumChannelsSidechain(spec.numChannels);
       }
 
       pluginInstance->setNonRealtime(true);
@@ -1584,6 +1684,20 @@ inline void init_external_plugins(py::module &m) {
                                reset);
               },
               EXTERNAL_PLUGIN_PROCESS_DOCSTRING, py::arg("input_array"),
+              py::arg("sample_rate"),
+              py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
+              py::arg("reset") = true)
+          .def(
+              "sidechain",
+              [](std::shared_ptr<Plugin> self, const py::array inputArray,
+                  const py::array sidechainArray, double sampleRate, 
+                  unsigned int bufferSize, bool reset) {
+                return sidechain(inputArray, sidechainArray, sampleRate, self, 
+                  bufferSize, reset);
+              },
+              EXTERNAL_PLUGIN_PROCESS_DOCSTRING, 
+              py::arg("input_array"),
+              py::arg("sidechain_array"),
               py::arg("sample_rate"),
               py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
               py::arg("reset") = true)

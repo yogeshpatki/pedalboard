@@ -275,6 +275,98 @@ processFloat32(const py::array_t<float, py::array::c_style> inputArray,
                                    inputArray.request().ndim);
 }
 
+/**
+ * Process a given audio buffer and sidechain buffer 
+ * through a given plugin at a given sample rate.
+ * Only supports float processing, not double, at the moment.
+ */
+
+py::array_t<float>
+sidechainFloat32(const py::array_t<float, py::array::c_style> inputArray,
+               const py::array_t<float, py::array::c_style> sidechainArray,
+               double sampleRate, 
+               const std::shared_ptr<Plugin> plugin,
+               unsigned int bufferSize, bool reset) {
+
+  std::cout << "sidechainFloat32" << std::endl;
+  if (!plugin)
+      return py::array_t<float>(0);
+  ChannelLayout inputChannelLayout = plugin->parseAndCacheChannelLayout(inputArray);
+  juce::AudioBuffer<float> ioBuffer =
+    copyPyArraysIntoJuceBuffer(inputArray, sidechainArray, {inputChannelLayout});
+  std::cout << "ioBuffer.getNumChannels(): " << ioBuffer.getNumChannels() << std::endl;
+  std::cout << "ioBuffer.getNumSamples(): " << ioBuffer.getNumSamples() << std::endl;
+  if (ioBuffer.getNumChannels() == 0) {
+    unsigned int numChannels = 0;
+    unsigned int numSamples = ioBuffer.getNumSamples();
+    // We have no channels to process; just return an empty output array with
+    // the same shape. Passing zero channels into JUCE breaks some assumptions
+    // all over the place.
+    py::array_t<float> outputArray;
+    if (inputArray.request().ndim == 2) {
+      switch (inputChannelLayout) {
+      case ChannelLayout::Interleaved:
+        outputArray = py::array_t<float>({numSamples, numChannels});
+        break;
+      case ChannelLayout::NotInterleaved:
+        outputArray = py::array_t<float>({numChannels, numSamples});
+        break;
+      default:
+        throw std::runtime_error(
+            "Internal error: got unexpected channel layout.");
+      }
+    } else {
+      outputArray = py::array_t<float>(0);
+    }
+    return outputArray;
+  }
+
+  int totalOutputLatencySamples;
+
+  {
+    py::gil_scoped_release release;
+
+    bufferSize = std::min(bufferSize, (unsigned int)ioBuffer.getNumSamples());
+    std::cout << "bufferSize: " << bufferSize << std::endl;
+    // We'd pass multiple arguments to scoped_lock here, but we don't know how
+    // many plugins have been passed at compile time - so instead, we do our own
+    // deadlock-avoiding multiple-lock algorithm here. By locking each plugin
+    // only in order of its pointers, we're guaranteed to avoid deadlocks with
+    // other threads that may be running this same code on the same plugins.
+    std::vector<std::shared_ptr<Plugin>> allPlugins;
+
+    allPlugins.push_back(plugin);
+
+    std::vector<std::unique_ptr<std::scoped_lock<std::mutex>>> pluginLocks;
+    for (auto plugin : allPlugins) {
+      pluginLocks.push_back(
+          std::make_unique<std::scoped_lock<std::mutex>>(plugin->mutex));
+    }
+
+    if (reset) {
+      plugin->reset();
+    }
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = static_cast<juce::uint32>(bufferSize);
+    spec.numChannels = static_cast<juce::uint32>(ioBuffer.getNumChannels());
+    std::cout << "spec.numChannels: " << spec.numChannels << std::endl;
+    std::cout << "spec.maximumBlockSize: " << spec.maximumBlockSize << std::endl;
+    std::cout << "spec.numChannels: " << spec.numChannels << std::endl;
+    plugin->prepareSidechain(spec);
+    std::cout << "Prepared Plugin " << std::endl;
+
+    int samplesReturned = process(ioBuffer, spec, {plugin}, reset);
+    std::cout << "Processed Plugin " << std::endl;
+
+    totalOutputLatencySamples = ioBuffer.getNumSamples() - samplesReturned;
+  }
+  
+  return copyJuceBufferIntoPyArray(ioBuffer, inputChannelLayout,
+                                   totalOutputLatencySamples,
+                                   inputArray.request().ndim);
+}
 py::array_t<float> process(py::array inputArray, double sampleRate,
                            const std::vector<std::shared_ptr<Plugin>> plugins,
                            unsigned int bufferSize, bool reset) {
@@ -292,6 +384,30 @@ py::array_t<float> process(py::array inputArray, double sampleRate,
   }
 
   return processFloat32(float32InputArray, sampleRate, plugins, bufferSize,
+                        reset);
+}
+
+py::array_t<float> sidechain(py::array inputArray, py::array sidechainArray, double sampleRate,
+                           const std::shared_ptr<Plugin> plugin,
+                           unsigned int bufferSize, bool reset) {
+  py::array_t<float, py::array::c_style> float32InputArray;
+  py::array_t<float, py::array::c_style> float32SidechainArray;
+
+  switch (inputArray.dtype().char_()) {
+  case 'f':
+    float32InputArray = inputArray;
+    float32SidechainArray = sidechainArray;
+    break;
+  case 'd':
+    float32InputArray = inputArray.attr("astype")("float32");
+    float32SidechainArray = sidechainArray.attr("astype")("float32");
+    break;
+  default:
+    throw py::type_error("Pedalboard only supports 32-bit and 64-bit floating "
+                         "point audio for processing.");
+  }
+
+  return sidechainFloat32(float32InputArray, float32SidechainArray, sampleRate, plugin, bufferSize,
                         reset);
 }
 
