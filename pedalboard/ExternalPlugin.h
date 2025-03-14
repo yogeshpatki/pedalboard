@@ -669,6 +669,11 @@ public:
     }
   }
 
+  bool hasSidechainInput() const {
+    // Check if the plugin has at least 2 input buses (bus 0 = main, bus 1 = sidechain).
+    return pluginInstance->getBusCount(true) > 1;
+  }
+
   void setPreset(const void *data, size_t size) {
     juce::MemoryBlock presetData(data, size);
     SetPresetVisitor visitor{presetData};
@@ -892,6 +897,8 @@ public:
     std::cout << "mainOutputBus: " << mainOutputBus->getNumberOfChannels() << std::endl;
     auxInputBus->enable(true);
     auxInputBus->setNumberOfChannels(mainInputBus->getNumberOfChannels());
+    std::cout << "auxInputBus: " << auxInputBus->getNumberOfChannels() << std::endl;
+    std::cout << "auxInputBus: Enabled: " << auxInputBus->isEnabled() << std::endl;
     // Try to disable all non-main input buses if possible:
     for (int i = 2; i < pluginInstance->getBusCount(true); i++) {
       auto *bus = pluginInstance->getBus(true, i);
@@ -1310,6 +1317,76 @@ public:
                                            channelPointers.size(),
                                            outputBlock.getNumSamples());
 
+      pluginInstance->processBlock(audioBuffer, emptyMidiBuffer);
+      samplesProvided += outputBlock.getNumSamples();
+
+      // To compensate for any latency added by the plugin,
+      // only tell Pedalboard to use the last _n_ samples.
+      long usableSamplesProduced =
+          std::max(0L, samplesProvided - pluginInstance->getLatencySamples());
+      return static_cast<int>(
+          std::min(usableSamplesProduced, (long)outputBlock.getNumSamples()));
+    }
+
+    return 0;
+  }
+
+  int process_sidechain(
+      const juce::dsp::ProcessContextReplacing<float> &context) override {
+    std::cout << "process_sidechain inside external plugin" << std::endl;
+    if (pluginInstance) {
+      juce::MidiBuffer emptyMidiBuffer;
+
+      if (pluginInstance->getMainBusNumInputChannels() == 0 &&
+          context.getInputBlock().getNumChannels() > 0) {
+        throw std::invalid_argument(
+            "Plugin '" + pluginInstance->getName().toStdString() +
+            "' does not accept audio input. It may be an instrument plugin "
+            "instead of an effect plugin.");
+      }
+
+      const juce::dsp::AudioBlock<const float> &inputBlock =
+          context.getInputBlock();
+      std::cout << "inputBlock.getNumChannels(): " << inputBlock.getNumChannels() << std::endl;
+      juce::dsp::AudioBlock<float> &outputBlock = context.getOutputBlock();
+      std::cout << "main bus input channels: " << pluginInstance->getMainBusNumInputChannels() << std::endl;
+      std::cout << "Total input channels: " << pluginInstance->getTotalNumInputChannels() << std::endl;
+      if ((size_t)pluginInstance->getTotalNumInputChannels() !=
+          inputBlock.getNumChannels()) {
+        throw std::invalid_argument(
+            "Plugin '" + pluginInstance->getName().toStdString() +
+            "' was instantiated with " +
+            std::to_string(pluginInstance->getTotalNumInputChannels()) +
+            "-channel input, but provided audio data contained " +
+            std::to_string(inputBlock.getNumChannels()) + " channel" +
+            (inputBlock.getNumChannels() == 1 ? "" : "s") + ".");
+      }
+
+      std::vector<float *> channelPointers(
+          pluginInstance->getTotalNumOutputChannels());
+
+      for (size_t i = 0; i < outputBlock.getNumChannels(); i++) {
+        channelPointers[i] = outputBlock.getChannelPointer(i);
+      }
+
+      // Depending on the bus layout, we may have to pass extra buffers to the
+      // plugin that we don't use. Use vector here to ensure the memory is
+      // freed via RAII.
+      std::vector<std::vector<float>> dummyChannels;
+      for (size_t i = outputBlock.getNumChannels(); i < channelPointers.size();
+           i++) {
+        std::vector<float> dummyChannel(outputBlock.getNumSamples());
+        channelPointers[i] = dummyChannel.data();
+        dummyChannels.push_back(std::move(dummyChannel));
+      }
+
+      // Create an audio buffer that doesn't actually allocate anything, but
+      // just points to the data in the ProcessContext.
+      juce::AudioBuffer<float> audioBuffer(channelPointers.data(),
+                                           channelPointers.size(),
+                                           outputBlock.getNumSamples());
+      std::cout << "audioBuffer.getNumChannels(): " << audioBuffer.getNumChannels() << std::endl;                                      
+      std::cout << "Actually processing the block through plugin now!" << std::endl;
       pluginInstance->processBlock(audioBuffer, emptyMidiBuffer);
       samplesProvided += outputBlock.getNumSamples();
 
