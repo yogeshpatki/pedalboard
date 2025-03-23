@@ -196,11 +196,8 @@ inline int process_sidechain(
     auto ioBlock = juce::dsp::AudioBlock<float>(
         ioBuffer.getArrayOfWritePointers(), ioBuffer.getNumChannels(),
         blockStart, blockSize);
-    std::cout << "ioblock.getNumChannels(): " << ioBlock.getNumChannels() << std::endl;
     juce::dsp::ProcessContextReplacing<float> context(ioBlock);
-    std::cout << "Sending Audio Block To Plugin" << std::endl;
     int outputSamples = plugin->process_sidechain(context);
-    std::cout << "Plugin Returned " << outputSamples << " Samples" << std::endl;
     if (outputSamples < 0) {
       throw std::runtime_error(
           "A plugin returned a negative number of output samples! "
@@ -474,7 +471,6 @@ sidechainFloat32(const py::array_t<float, py::array::c_style> inputArray,
     spec.numChannels = static_cast<juce::uint32>(ioBuffer.getNumChannels());
     std::cout << "spec.numChannels: " << spec.numChannels << std::endl;
     std::cout << "spec.maximumBlockSize: " << spec.maximumBlockSize << std::endl;
-    std::cout << "spec.numChannels: " << spec.numChannels << std::endl;
     plugin->prepareSidechain(spec);
     std::cout << "Prepared Plugin " << std::endl;
 

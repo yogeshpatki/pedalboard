@@ -880,6 +880,7 @@ public:
           " output channels.)");
     }
   }
+
   void setNumChannelsSidechain(int numChannels) {
     if (!pluginInstance)
       return;
@@ -890,16 +891,12 @@ public:
     auto mainInputBus = pluginInstance->getBus(true, 0);
     auto auxInputBus = pluginInstance->getBus(true, 1);
     auto mainOutputBus = pluginInstance->getBus(false, 0);
-    std::cout << "mainInputBus: " << mainInputBus->getNumberOfChannels() << std::endl;
-    std::cout << "mainInputBus Enabled: " << mainInputBus->isEnabled() << std::endl;
-    std::cout << "auxInputBus: " << auxInputBus->getNumberOfChannels() << std::endl;
-    std::cout << "auxInputBus: Enabled: " << auxInputBus->isEnabled() << std::endl;
-    std::cout << "mainOutputBus: " << mainOutputBus->getNumberOfChannels() << std::endl;
+
     auxInputBus->enable(true);
-    auxInputBus->setNumberOfChannels(mainInputBus->getNumberOfChannels());
     std::cout << "auxInputBus: " << auxInputBus->getNumberOfChannels() << std::endl;
     std::cout << "auxInputBus: Enabled: " << auxInputBus->isEnabled() << std::endl;
     // Try to disable all non-main input buses if possible:
+
     for (int i = 2; i < pluginInstance->getBusCount(true); i++) {
       auto *bus = pluginInstance->getBus(true, i);
       if (bus->isNumberOfChannelsSupported(0))
@@ -922,21 +919,32 @@ public:
     // Cache these values in case the plugin fails to update:
     auto previousInputChannelCount =
         mainInputBus ? mainInputBus->getNumberOfChannels() : 0;
+    auto previousAuxInputChannelCount =
+        auxInputBus ? auxInputBus->getNumberOfChannels() : 0;
     auto previousOutputChannelCount = mainOutputBus->getNumberOfChannels();
+    std::cout << "previousAuxChannelCount: " << previousAuxInputChannelCount << std::endl;
     std::cout << "previousInputChannelCount: " << previousInputChannelCount << std::endl;
     std::cout << "previousOutputChannelCount: " << previousOutputChannelCount << std::endl;
 
     // Try to change the input and output bus channel counts...
-    if (mainInputBus)
-      mainInputBus->setNumberOfChannels(numChannels);
-    mainOutputBus->setNumberOfChannels(numChannels);
+    if (mainInputBus) {
+      std::cout << "Setting channels on mainInputBus to " << numChannels / 2 << std::endl;
+      mainInputBus->setNumberOfChannels(numChannels / 2);
+    }  
+    // Try to change the input and output bus channel counts...
+    if (auxInputBus) {
+      std::cout << "Setting channels on Aux to " << numChannels / 2 << std::endl;
+      auxInputBus->setNumberOfChannels(numChannels / 2);
+    }
+    mainOutputBus->setNumberOfChannels(numChannels / 2);
     std::cout << "Main InputBus Count: " << mainInputBus->getNumberOfChannels() << std::endl;
-    std::cout << "Main OututBus Count: " << mainOutputBus->getNumberOfChannels() << std::endl;
+    std::cout << "Aux Input Bus Count: " << auxInputBus->getNumberOfChannels() << std::endl;
+    std::cout << "Main Output Bus Count: " << mainOutputBus->getNumberOfChannels() << std::endl;
 
     // If, post-reload, we still can't use the right number of channels, let's
     // conclude the plugin doesn't allow this channel count.
-    if ((!mainInputBus || mainInputBus->getNumberOfChannels() != numChannels) ||
-        mainOutputBus->getNumberOfChannels() != numChannels) {
+    if ((!mainInputBus || mainInputBus->getNumberOfChannels() + auxInputBus->getNumberOfChannels() != numChannels) ||
+        mainOutputBus->getNumberOfChannels() != (numChannels / 2)) {
 
       // Reset the bus configuration to what it was before, so we don't
       // leave one of the buses smaller than the other:
@@ -954,6 +962,7 @@ public:
           std::to_string(mainOutputBus->getNumberOfChannels()) +
           " output channels.)");
     }
+    std::cout << "Successfully set channels" << std::endl;
   }
 
   const juce::String getName() const {
@@ -1333,7 +1342,6 @@ public:
 
   int process_sidechain(
       const juce::dsp::ProcessContextReplacing<float> &context) override {
-    std::cout << "process_sidechain inside external plugin" << std::endl;
     if (pluginInstance) {
       juce::MidiBuffer emptyMidiBuffer;
 
@@ -1349,6 +1357,7 @@ public:
           context.getInputBlock();
       std::cout << "inputBlock.getNumChannels(): " << inputBlock.getNumChannels() << std::endl;
       juce::dsp::AudioBlock<float> &outputBlock = context.getOutputBlock();
+      std::cout << "outputBlock.getNumChannels(): " << outputBlock.getNumChannels() << std::endl;
       std::cout << "main bus input channels: " << pluginInstance->getMainBusNumInputChannels() << std::endl;
       std::cout << "Total input channels: " << pluginInstance->getTotalNumInputChannels() << std::endl;
       if ((size_t)pluginInstance->getTotalNumInputChannels() !=
@@ -1363,7 +1372,7 @@ public:
       }
 
       std::vector<float *> channelPointers(
-          pluginInstance->getTotalNumOutputChannels());
+          pluginInstance->getTotalNumInputChannels());
 
       for (size_t i = 0; i < outputBlock.getNumChannels(); i++) {
         channelPointers[i] = outputBlock.getChannelPointer(i);
@@ -1386,6 +1395,8 @@ public:
                                            channelPointers.size(),
                                            outputBlock.getNumSamples());
       std::cout << "audioBuffer.getNumChannels(): " << audioBuffer.getNumChannels() << std::endl;                                      
+      std::cout << "aoutputBlock.getNumChannels(): " << outputBlock.getNumChannels() << std::endl;                                      
+      std::cout << "achannelPointers.size(): " << channelPointers.size() << std::endl;                                      
       std::cout << "Actually processing the block through plugin now!" << std::endl;
       pluginInstance->processBlock(audioBuffer, emptyMidiBuffer);
       samplesProvided += outputBlock.getNumSamples();
