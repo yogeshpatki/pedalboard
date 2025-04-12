@@ -184,15 +184,11 @@ juce::AudioBuffer<T> copyPyArraysIntoJuceBuffer(
     throw std::runtime_error("Number of input dimensions must be 1 or 2 (got " +
                              std::to_string(inputInfo.ndim) + ").");
   }
-  std::cout << "numChannels: " << numChannels << std::endl;
-  std::cout << "numSamples: " << numSamples << std::endl;
-  std::cout << "numChannels Sidechain: " << sidechainInfo.shape[0] << std::endl;
-  std::cout << "numSamples Sidechain: " << sidechainInfo.shape[1] << std::endl;
   std::string printChannelLayout = (inputChannelLayout == ChannelLayout::Interleaved) ? "Interleaved" : "Non Interleaved";
-  std::cout << "Channel Layout: " << printChannelLayout << std::endl;
+
   // We are assuming InputArray and Sidechain array have same dimensions. we need to handle for cases where that is not the case.
   juce::AudioBuffer<T> ioBuffer(numChannels * 2, numSamples);
-  std::cout << "ioBuffer.getNumChannels(): " << ioBuffer.getNumChannels() << std::endl;
+
   // Depending on the input channel layout, we need to copy data
   // differently. This loop is duplicated here to move the if statement
   // outside of the tight loop, as we don't need to re-check that the input
@@ -200,7 +196,6 @@ juce::AudioBuffer<T> copyPyArraysIntoJuceBuffer(
   switch (inputChannelLayout) {
   case ChannelLayout::Interleaved:
     for (unsigned int i = 0; i < numChannels; i++) {
-      std::cout << "Processing for Interleaved Layout for input Channel " << i << std::endl;
       T *channelBuffer = ioBuffer.getWritePointer(i);
       // We're de-interleaving the data here, so we can't use copyFrom.
       for (unsigned int j = 0; j < numSamples; j++) {
@@ -208,7 +203,6 @@ juce::AudioBuffer<T> copyPyArraysIntoJuceBuffer(
       }
     }
     for (unsigned int i = 0; i < numChannels; i++) {
-      std::cout << "Processing for Interleaved Layout for sidechain Channel " << i << std::endl;
       T *channelBuffer = ioBuffer.getWritePointer(i + numChannels);
       // We're de-interleaving the data here, so we can't use copyFrom.
       for (unsigned int j = 0; j < numSamples; j++) {
@@ -222,12 +216,10 @@ juce::AudioBuffer<T> copyPyArraysIntoJuceBuffer(
     }
 
     for (unsigned int i = 0; i < numChannels; i++) {
-      std::cout << "Processing for NonInterleaved Layout for Input Channel " << i << std::endl;
       ioBuffer.copyFrom(
           i, 0, static_cast<T *>(inputInfo.ptr) + (numSamples * i), numSamples);
     }
     for (unsigned int i = 0; i < numChannels; i++) {
-      std::cout << "Processing for NonInterleaved Layout for Sidechain Channel " << i << std::endl;
       ioBuffer.copyFrom(
           i + numChannels, 0, static_cast<T *>(sidechainInfo.ptr) + (numSamples * i), numSamples);
     }

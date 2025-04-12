@@ -160,14 +160,12 @@ inline int process_sidechain(
                    const std::shared_ptr<Plugin> plugin,
                    bool isProbablyLastProcessCall) {
 
-  std::cout << "Processing Sidechain line 163" << std::endl;
   if (!plugin)
     return 0;
   
   int totalOutputLatencySamples = 0;
   int expectedOutputLatency = plugin->getLatencyHint();
   int intendedOutputBufferSize = ioBuffer.getNumSamples();
-  std::cout << "Tota'l' Output Latency Samples: " << totalOutputLatencySamples << std::endl;
   if (expectedOutputLatency > 0 && isProbablyLastProcessCall) {
     // This is a hint - it's possible that the plugin(s) latency values
     // will change and we'll have to reallocate again later on.
@@ -406,14 +404,12 @@ sidechainFloat32(const py::array_t<float, py::array::c_style> inputArray,
                const std::shared_ptr<Plugin> plugin,
                unsigned int bufferSize, bool reset) {
 
-  std::cout << "sidechainFloat32" << std::endl;
   if (!plugin)
       return py::array_t<float>(0);
   ChannelLayout inputChannelLayout = plugin->parseAndCacheChannelLayout(inputArray);
   juce::AudioBuffer<float> ioBuffer =
     copyPyArraysIntoJuceBuffer(inputArray, sidechainArray, {inputChannelLayout});
-  std::cout << "ioBuffer.getNumChannels(): " << ioBuffer.getNumChannels() << std::endl;
-  std::cout << "ioBuffer.getNumSamples(): " << ioBuffer.getNumSamples() << std::endl;
+  
   if (ioBuffer.getNumChannels() == 0) {
     unsigned int numChannels = 0;
     unsigned int numSamples = ioBuffer.getNumSamples();
@@ -445,7 +441,6 @@ sidechainFloat32(const py::array_t<float, py::array::c_style> inputArray,
     py::gil_scoped_release release;
 
     bufferSize = std::min(bufferSize, (unsigned int)ioBuffer.getNumSamples());
-    std::cout << "bufferSize: " << bufferSize << std::endl;
     // We'd pass multiple arguments to scoped_lock here, but we don't know how
     // many plugins have been passed at compile time - so instead, we do our own
     // deadlock-avoiding multiple-lock algorithm here. By locking each plugin
@@ -469,13 +464,9 @@ sidechainFloat32(const py::array_t<float, py::array::c_style> inputArray,
     spec.sampleRate = sampleRate;
     spec.maximumBlockSize = static_cast<juce::uint32>(bufferSize);
     spec.numChannels = static_cast<juce::uint32>(ioBuffer.getNumChannels());
-    std::cout << "spec.numChannels: " << spec.numChannels << std::endl;
-    std::cout << "spec.maximumBlockSize: " << spec.maximumBlockSize << std::endl;
     plugin->prepareSidechain(spec);
-    std::cout << "Prepared Plugin " << std::endl;
 
     int samplesReturned = process_sidechain(ioBuffer, spec, {plugin}, reset);
-    std::cout << "Processed Plugin " << std::endl;
 
     totalOutputLatencySamples = ioBuffer.getNumSamples() - samplesReturned;
   }

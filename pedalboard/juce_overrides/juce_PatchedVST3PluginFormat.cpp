@@ -3324,7 +3324,6 @@ private:
   template <typename FloatType>
   void associateWith(Vst::ProcessData &destination,
                      AudioBuffer<FloatType> &buffer) {
-    std::cout << "**************associateWith" << std::endl;
     VST3BufferExchange<FloatType>::mapBufferToBuses(
         inputBuses, inputBusMap.get<FloatType>(), cachedBusLayouts.inputBuses,
         buffer);
