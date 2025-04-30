@@ -928,7 +928,7 @@ public:
     if (auxInputBus) {
       auxInputBus->setNumberOfChannels(numChannels / 2);
     }
-    mainOutputBus->setNumberOfChannels(numChannels / 2);`
+    mainOutputBus->setNumberOfChannels(numChannels / 2);
     // If, post-reload, we still can't use the right number of channels, let's
     // conclude the plugin doesn't allow this channel count.
     if ((!mainInputBus || mainInputBus->getNumberOfChannels() + auxInputBus->getNumberOfChannels() != numChannels) ||
