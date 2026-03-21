@@ -49,14 +49,14 @@
 
 `pedalboard` is available via PyPI (via [Platform Wheels](https://packaging.python.org/guides/distributing-packages-using-setuptools/#platform-wheels)):
 ```
-pip install pedalboard  # That's it! No other dependencies required.
+pip install pedalboard
 ```
 
 If you are new to Python, follow [INSTALLATION.md](https://github.com/spotify/pedalboard/blob/master/INSTALLATION.md) for a robust guide.
 
 ### Compatibility
 
-`pedalboard` is thoroughly tested with Python 3.8, 3.9, 3.10, 3.11, 3.12, and 3.13.
+`pedalboard` is thoroughly tested with Python 3.10, 3.11, 3.12, 3.13, and 3.14.
 
 - Linux
   - Tested heavily in production use cases at Spotify
@@ -305,7 +305,7 @@ To cite via BibTeX:
 ```
 
 ## License
-`pedalboard` is Copyright 2021-2024 Spotify AB.
+`pedalboard` is Copyright 2021-2025 Spotify AB.
 
 `pedalboard` is licensed under the [GNU General Public License v3](https://www.gnu.org/licenses/gpl-3.0.en.html). `pedalboard` includes a number of libraries that are statically compiled, and which carry the following licenses:
 
@@ -314,5 +314,6 @@ To cite via BibTeX:
  - The `PitchShift` plugin and `time_stretch` functions use [the Rubber Band Library](https://github.com/breakfastquay/rubberband), which is [dual-licensed under a commercial license](https://breakfastquay.com/technology/license.html) and the GPLv2 (or newer). [FFTW](https://www.fftw.org/) is also included to speed up Rubber Band, and [is licensed under the GPLv2 (or newer)](https://www.fftw.org/doc/License-and-Copyright.html).
  - The `MP3Compressor` plugin uses [libmp3lame from the LAME project](https://lame.sourceforge.io/), which is [licensed under the LGPLv2](https://github.com/lameproject/lame/blob/master/README) and [upgraded to the GPLv3 for inclusion in this project (as permitted by the LGPLv2)](https://www.gnu.org/licenses/gpl-faq.html#AllCompatibility).
  - The `GSMFullRateCompressor` plugin uses [libgsm](http://quut.com/gsm/), which is [licensed under the ISC license](https://github.com/timothytylee/libgsm/blob/master/COPYRIGHT) and [compatible with the GPLv3](https://www.gnu.org/licenses/license-list.en.html#ISC).
+ - WAV files with formats not natively supported by JUCE (ADPCM, A-law, µ-law, 64-bit float) are decoded using [dr_wav](https://github.com/mackron/dr_libs) by David Reid, which is released into the [public domain](https://unlicense.org/).
 
 _VST is a registered trademark of Steinberg Media Technologies GmbH._

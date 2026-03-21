@@ -155,7 +155,7 @@ public:
         } else {
           ss << " has its stream position set to the end of the stream ("
              << originalStreamPosition;
-          ss << "bytes).";
+          ss << " bytes).";
         }
         ss << " Try seeking this file-like object back to its start before "
               "passing it to AudioFile";
@@ -277,12 +277,13 @@ public:
 
     long long numSamplesToKeep = numSamples;
 
-    py::buffer_info outputInfo = buffer.request();
+    // Get the data pointer directly without keeping a buffer_info reference
+    // that would prevent resizing later (needed for Python 3.14+ / NumPy 2.x)
+    float *outputPtr = buffer.mutable_data();
 
     {
       py::gil_scoped_release release;
-      numSamplesToKeep =
-          readInternal(numChannels, numSamples, (float *)outputInfo.ptr);
+      numSamplesToKeep = readInternal(numChannels, numSamples, outputPtr);
 
       // After this point, we no longer need to hold the read lock as we don't
       // interact with the reader object anymore. Releasing this early (before
@@ -429,6 +430,12 @@ public:
       throw std::runtime_error("I/O operation on a closed file.");
 
     if (reader->usesFloatingPointData) {
+      if (reader->bitsPerSample > 32) {
+        throw std::runtime_error(
+            "This file contains " + std::to_string(reader->bitsPerSample) +
+            "-bit floating-point audio, which cannot be returned without "
+            "losing precision. Use read() instead to get 32-bit float data.");
+      }
       return read(numSamples);
     } else {
       switch (reader->bitsPerSample) {

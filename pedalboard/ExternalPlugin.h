@@ -669,6 +669,11 @@ public:
     }
   }
 
+  bool hasSidechainInput() const {
+    // Check if the plugin has at least 2 input buses (bus 0 = main, bus 1 = sidechain).
+    return pluginInstance->getBusCount(true) > 1;
+  }
+
   void setPreset(const void *data, size_t size) {
     juce::MemoryBlock presetData(data, size);
     SetPresetVisitor visitor{presetData};
@@ -876,6 +881,77 @@ public:
     }
   }
 
+  void setNumChannelsSidechain(int numChannels) {
+    if (!pluginInstance)
+      return;
+
+    if (numChannels == 0)
+      return;
+
+    auto mainInputBus = pluginInstance->getBus(true, 0);
+    auto auxInputBus = pluginInstance->getBus(true, 1);
+    auto mainOutputBus = pluginInstance->getBus(false, 0);
+
+    auxInputBus->enable(true);
+    // Try to disable all non-main input buses if possible:
+
+    for (int i = 2; i < pluginInstance->getBusCount(true); i++) {
+      auto *bus = pluginInstance->getBus(true, i);
+      if (bus->isNumberOfChannelsSupported(0))
+        bus->enable(false);
+    }
+
+    // ...and all non-main output buses too:
+    for (int i = 1; i < pluginInstance->getBusCount(false); i++) {
+      auto *bus = pluginInstance->getBus(false, i);
+      if (bus->isNumberOfChannelsSupported(0))
+        bus->enable(false);
+    }
+
+    if ((!mainInputBus || !auxInputBus || 
+        mainInputBus->getNumberOfChannels() + auxInputBus->getNumberOfChannels() == numChannels) &&
+        mainOutputBus->getNumberOfChannels() == mainInputBus->getNumberOfChannels()) {
+      return;
+    }
+
+    // Cache these values in case the plugin fails to update:
+    auto previousInputChannelCount =
+        mainInputBus ? mainInputBus->getNumberOfChannels() : 0;
+    auto previousAuxInputChannelCount =
+        auxInputBus ? auxInputBus->getNumberOfChannels() : 0;
+    auto previousOutputChannelCount = mainOutputBus->getNumberOfChannels();
+    // Try to change the input and output bus channel counts...
+    if (mainInputBus) {
+      mainInputBus->setNumberOfChannels(numChannels / 2);
+    }  
+    // Try to change the input and output bus channel counts...
+    if (auxInputBus) {
+      auxInputBus->setNumberOfChannels(numChannels / 2);
+    }
+    mainOutputBus->setNumberOfChannels(numChannels / 2);
+    // If, post-reload, we still can't use the right number of channels, let's
+    // conclude the plugin doesn't allow this channel count.
+    if ((!mainInputBus || mainInputBus->getNumberOfChannels() + auxInputBus->getNumberOfChannels() != numChannels) ||
+        mainOutputBus->getNumberOfChannels() != (numChannels / 2)) {
+
+      // Reset the bus configuration to what it was before, so we don't
+      // leave one of the buses smaller than the other:
+      if (mainInputBus)
+        mainInputBus->setNumberOfChannels(previousInputChannelCount);
+      mainOutputBus->setNumberOfChannels(previousOutputChannelCount);
+
+      throw std::invalid_argument(
+          "Plugin '" + pluginInstance->getName().toStdString() +
+          "' does not support " + std::to_string(numChannels) +
+          "-channel output. (Main bus currently expects " +
+          std::to_string(mainInputBus ? mainInputBus->getNumberOfChannels()
+                                      : 0) +
+          " input channels and " +
+          std::to_string(mainOutputBus->getNumberOfChannels()) +
+          " output channels.)");
+    }
+  }
+
   const juce::String getName() const {
     return pluginInstance ? pluginInstance->getName() : "<unknown>";
   }
@@ -900,8 +976,8 @@ public:
    * loading assets from disk, etc). These background tasks may depend on the
    * event loop, which Pedalboard does not pump by default.
    *
-   * Returns true if the plugin rendered audio within the alloted timeout; false
-   * if no audio was received before the timeout expired.
+   * Returns true if the plugin rendered audio within the allotted timeout;
+   * false if no audio was received before the timeout expired.
    */
   bool attemptToWarmUp() {
     if (!pluginInstance || initializationTimeout <= 0)
@@ -919,7 +995,7 @@ public:
       return false;
     }
 
-    // Set input and output busses/channels appropriately:
+    // Set input and output buses/channels appropriately:
     int numOutputChannels =
         std::max(pluginInstance->getMainBusNumInputChannels(),
                  pluginInstance->getMainBusNumOutputChannels());
@@ -1019,7 +1095,7 @@ public:
       return ExternalPluginReloadType::Unknown;
     }
 
-    // Set input and output busses/channels appropriately:
+    // Set input and output buses/channels appropriately:
     setNumChannels(numInputChannels);
     pluginInstance->setNonRealtime(true);
     pluginInstance->prepareToPlay(sampleRate, bufferSize);
@@ -1144,6 +1220,33 @@ public:
     }
   }
 
+  /**
+   * prepare() is called on every render call, regardless of if the plugin has
+   * been reset.
+   */
+  void prepareSidechain(const juce::dsp::ProcessSpec &spec) override {
+    if (!pluginInstance) {
+      return;
+    }
+
+    if (lastSpec.sampleRate != spec.sampleRate ||
+        lastSpec.maximumBlockSize < spec.maximumBlockSize ||
+        lastSpec.numChannels != spec.numChannels) {
+
+      // Changing the number of channels requires releaseResources to be
+      // called:
+      if (lastSpec.numChannels != spec.numChannels) {
+        pluginInstance->releaseResources();
+        setNumChannelsSidechain(spec.numChannels);
+      }
+
+      pluginInstance->setNonRealtime(true);
+      pluginInstance->prepareToPlay(spec.sampleRate, spec.maximumBlockSize);
+
+      lastSpec = spec;
+    }
+  }
+
   int process(
       const juce::dsp::ProcessContextReplacing<float> &context) override {
 
@@ -1210,6 +1313,70 @@ public:
                                            channelPointers.size(),
                                            outputBlock.getNumSamples());
 
+      pluginInstance->processBlock(audioBuffer, emptyMidiBuffer);
+      samplesProvided += outputBlock.getNumSamples();
+
+      // To compensate for any latency added by the plugin,
+      // only tell Pedalboard to use the last _n_ samples.
+      long usableSamplesProduced =
+          std::max(0L, samplesProvided - pluginInstance->getLatencySamples());
+      return static_cast<int>(
+          std::min(usableSamplesProduced, (long)outputBlock.getNumSamples()));
+    }
+
+    return 0;
+  }
+
+  int process_sidechain(
+      const juce::dsp::ProcessContextReplacing<float> &context) override {
+    if (pluginInstance) {
+      juce::MidiBuffer emptyMidiBuffer;
+
+      if (pluginInstance->getMainBusNumInputChannels() == 0 &&
+          context.getInputBlock().getNumChannels() > 0) {
+        throw std::invalid_argument(
+            "Plugin '" + pluginInstance->getName().toStdString() +
+            "' does not accept audio input. It may be an instrument plugin "
+            "instead of an effect plugin.");
+      }
+
+      const juce::dsp::AudioBlock<const float> &inputBlock =
+          context.getInputBlock();
+      juce::dsp::AudioBlock<float> &outputBlock = context.getOutputBlock();
+      if ((size_t)pluginInstance->getTotalNumInputChannels() !=
+          inputBlock.getNumChannels()) {
+        throw std::invalid_argument(
+            "Plugin '" + pluginInstance->getName().toStdString() +
+            "' was instantiated with " +
+            std::to_string(pluginInstance->getTotalNumInputChannels()) +
+            "-channel input, but provided audio data contained " +
+            std::to_string(inputBlock.getNumChannels()) + " channel" +
+            (inputBlock.getNumChannels() == 1 ? "" : "s") + ".");
+      }
+
+      std::vector<float *> channelPointers(
+          pluginInstance->getTotalNumInputChannels());
+
+      for (size_t i = 0; i < outputBlock.getNumChannels(); i++) {
+        channelPointers[i] = outputBlock.getChannelPointer(i);
+      }
+
+      // Depending on the bus layout, we may have to pass extra buffers to the
+      // plugin that we don't use. Use vector here to ensure the memory is
+      // freed via RAII.
+      std::vector<std::vector<float>> dummyChannels;
+      for (size_t i = outputBlock.getNumChannels(); i < channelPointers.size();
+           i++) {
+        std::vector<float> dummyChannel(outputBlock.getNumSamples());
+        channelPointers[i] = dummyChannel.data();
+        dummyChannels.push_back(std::move(dummyChannel));
+      }
+
+      // Create an audio buffer that doesn't actually allocate anything, but
+      // just points to the data in the ProcessContext.
+      juce::AudioBuffer<float> audioBuffer(channelPointers.data(),
+                                           channelPointers.size(),
+                                           outputBlock.getNumSamples());
       pluginInstance->processBlock(audioBuffer, emptyMidiBuffer);
       samplesProvided += outputBlock.getNumSamples();
 
@@ -1584,6 +1751,20 @@ inline void init_external_plugins(py::module &m) {
                                reset);
               },
               EXTERNAL_PLUGIN_PROCESS_DOCSTRING, py::arg("input_array"),
+              py::arg("sample_rate"),
+              py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
+              py::arg("reset") = true)
+          .def(
+              "sidechain",
+              [](std::shared_ptr<Plugin> self, const py::array inputArray,
+                  const py::array sidechainArray, double sampleRate, 
+                  unsigned int bufferSize, bool reset) {
+                return sidechain(inputArray, sidechainArray, sampleRate, self, 
+                  bufferSize, reset);
+              },
+              EXTERNAL_PLUGIN_PROCESS_DOCSTRING, 
+              py::arg("input_array"),
+              py::arg("sidechain_array"),
               py::arg("sample_rate"),
               py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
               py::arg("reset") = true)

@@ -39,6 +39,13 @@ public:
   virtual void prepare(const juce::dsp::ProcessSpec &spec) = 0;
 
   /**
+   * Prepare the data structures that will be necessary for this plugin to
+   * process audio at the provided sample rate, maximum block size, and number
+   * of channels.
+   */
+  virtual void prepareSidechain(const juce::dsp::ProcessSpec &spec) {}
+
+  /**
    * Process a single buffer of audio through this plugin.
    * Returns the number of samples that were output.
    *
@@ -47,7 +54,18 @@ public:
    * (i.e.: they should come last).
    */
   virtual int
-  process(const juce::dsp::ProcessContextReplacing<float> &context) = 0;
+  process(const juce::dsp::ProcessContextReplacing<float> &context) = 0;  /**
+   * Process a single buffer of audio through this plugin.
+   * Returns the number of samples that were output.
+   *
+   * If less than a whole buffer of audio was output, the samples that
+   * were produced should be right-aligned in the buffer
+   * (i.e.: they should come last).
+   */
+  virtual int
+  process_sidechain(const juce::dsp::ProcessContextReplacing<float> &context) {
+    return 0;
+  };
 
   /**
    * Reset this plugin's state, clearing any internal buffers or delay lines.

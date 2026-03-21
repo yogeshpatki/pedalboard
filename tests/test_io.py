@@ -25,10 +25,11 @@ import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from typing import Optional
+from typing import BinaryIO, Optional, cast
 
 import mutagen
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 import pedalboard
@@ -64,8 +65,8 @@ UNSUPPORTED_FILENAMES = [
 
 
 @lru_cache(maxsize=None)
-def cached_rand(*args, **kwargs):
-    return np.random.rand(*args, **kwargs)
+def cached_rand(*args, **kwargs) -> npt.NDArray[np.float32]:
+    return cast(npt.NDArray, np.random.rand(*args, **kwargs)).astype(np.float32)
 
 
 def get_tolerance_for_format_and_bit_depth(extension: str, input_format, file_dtype: str) -> float:
@@ -100,7 +101,7 @@ def test_read_constructor_dispatch():
     # Don't support reading a file by passing a mode to the
     # subclass constructor (which would be redundant):
     with pytest.raises(TypeError) as e:
-        pedalboard.io.ReadableAudioFile(filename, "r")
+        pedalboard.io.ReadableAudioFile(filename, "r")  # type: ignore
     assert "incompatible function arguments" in str(e)
 
 
@@ -109,7 +110,7 @@ def test_write_constructor_dispatch(tmp_path: pathlib.Path):
 
     # Don't support writing to a file with just its filename and write args:
     with pytest.raises(TypeError):
-        pedalboard.io.AudioFile(filename, 44100, 1)
+        pedalboard.io.AudioFile(filename, 44100, 1)  # type: ignore
 
     # Support writing to a file with just its filename and an explicit "w" (write) flag:
     assert isinstance(
@@ -124,7 +125,7 @@ def test_write_constructor_dispatch(tmp_path: pathlib.Path):
     # Don't support writing to a file by passing a mode
     # to the subclass constructor (which would be redundant):
     with pytest.raises(TypeError) as e:
-        pedalboard.io.WriteableAudioFile(filename, "w", 44100, 1)
+        pedalboard.io.WriteableAudioFile(filename, "w", 44100, 1)  # type: ignore
     assert "incompatible function arguments" in str(e)
 
     # Support writing to a file by omitting num_channels to WriteableAudioFile:
@@ -135,7 +136,7 @@ def test_write_constructor_dispatch(tmp_path: pathlib.Path):
 
     # but not if samplerate is missing:
     with pytest.raises(TypeError) as e:
-        pedalboard.io.WriteableAudioFile(filename, num_channels=1)
+        pedalboard.io.WriteableAudioFile(filename, num_channels=1)  # type: ignore
     assert "samplerate" in str(e)
 
     # ... or to regular AudioFile with a "w" flag:
@@ -146,7 +147,7 @@ def test_write_constructor_dispatch(tmp_path: pathlib.Path):
 
     # but not if samplerate is missing:
     with pytest.raises(TypeError) as e:
-        pedalboard.io.AudioFile(filename, "w", num_channels=1)
+        pedalboard.io.AudioFile(filename, "w", num_channels=1)  # type: ignore
     assert "samplerate" in str(e)
 
 
@@ -172,8 +173,9 @@ def test_basic_read(audio_filename: str, samplerate: float):
     samples = af.read(samplerate * EXPECTED_DURATION_SECONDS)
     assert samples.shape == (1, int(samplerate * EXPECTED_DURATION_SECONDS))
 
-    # File should no longer be useful:
-    af.read(1).nbytes == 0
+    if any(ext in audio_filename for ext in EXPECT_LENGTH_TO_BE_EXACT):
+        # File should no longer be useful:
+        assert af.read(1).nbytes == 0
 
     # Seeking back to the start of the file should work:
     assert af.seekable()
@@ -241,8 +243,9 @@ def test_use_reader_as_context_manager(audio_filename: str, samplerate: float):
         samples = af.read(int(samplerate * EXPECTED_DURATION_SECONDS))
         assert samples.shape == (1, int(samplerate * EXPECTED_DURATION_SECONDS))
 
-        # File should no longer be useful:
-        af.read(1).nbytes == 0
+        if any(ext in audio_filename for ext in EXPECT_LENGTH_TO_BE_EXACT):
+            # File should no longer be useful:
+            assert af.read(1).nbytes == 0
 
         # Seeking back to the start of the file should work:
         assert af.seekable()
@@ -273,11 +276,13 @@ def test_use_reader_as_context_manager(audio_filename: str, samplerate: float):
 
 
 def test_context_manager_allows_exceptions():
+    af = None
+
     with pytest.raises(AssertionError):
         with pedalboard.io.AudioFile(FILENAMES_AND_SAMPLERATES[0][0]) as af:
             assert False
 
-    assert af.closed
+    assert af is not None and af.closed
 
 
 @pytest.mark.parametrize("audio_filename,samplerate", FILENAMES_AND_SAMPLERATES)
@@ -311,8 +316,9 @@ def test_read_from_seekable_stream(audio_filename: str, samplerate: float):
         samples = af.read(int(samplerate * EXPECTED_DURATION_SECONDS))
         assert samples.shape == (1, int(samplerate * EXPECTED_DURATION_SECONDS))
 
-        # File should no longer be useful:
-        af.read(1).nbytes == 0
+        if any(ext in audio_filename for ext in EXPECT_LENGTH_TO_BE_EXACT):
+            # File should no longer be useful:
+            assert af.read(1).nbytes == 0
 
         # Seeking back to the start of the file should work:
         assert af.seekable()
@@ -397,7 +403,7 @@ def test_read_from_bytes_io_memoryview_without_gil():
     with pedalboard.io.AudioFile(stream, "w", 44100, 1, format="wav") as af:
         af.write(cached_rand(num_frames))
 
-    num_cpus = os.cpu_count()
+    num_cpus = os.cpu_count() or 1
 
     ios = [io.BytesIO(stream.getvalue()) for _ in range(num_cpus)]
 
@@ -507,7 +513,8 @@ def test_file_like_must_be_seekable():
     with open(audio_filename, "rb") as f:
         stream = io.BytesIO(f.read())
     stream.seekable = lambda: False
-    stream.getbuffer = lambda: False  # avoid triggering the fast-path for memoryview
+    # avoid triggering the fast-path for memoryview
+    stream.getbuffer = lambda: False  # type: ignore
 
     with pytest.raises(ValueError) as e:
         with pedalboard.io.AudioFile(stream):
@@ -523,8 +530,9 @@ def test_no_crash_if_type_error_on_file_like():
         stream = io.BytesIO(f.read())
 
     # Seekable should be a method, not a property:
-    stream.seekable = False
-    stream.getbuffer = lambda: False  # avoid triggering the fast-path for memoryview
+    stream.seekable = False  # type: ignore
+    # avoid triggering the fast-path for memoryview
+    stream.getbuffer = lambda: False  # type: ignore
 
     with pytest.raises(TypeError) as e:
         with pedalboard.io.AudioFile(stream):
@@ -537,7 +545,7 @@ def test_file_like_must_be_seekable_for_write():
     stream = io.BytesIO()
     stream.seek = lambda x: (_ for _ in ()).throw(
         ValueError(f"Failed to seek from {stream.tell():,} to {x:,} because I don't wanna")
-    )
+    )  # type: ignore
 
     with pytest.raises(ValueError) as e:
         with pedalboard.io.AudioFile(stream, "w", 44100, 2, format="flac"):
@@ -584,13 +592,13 @@ def test_read_from_non_bytes_stream(extension: str):
     stream.name = f"foo{extension}"
 
     with pytest.raises(TypeError) as e:
-        pedalboard.io.AudioFile(stream, "r")
+        pedalboard.io.AudioFile(stream, "r")  # type: ignore
 
     assert "expected to return bytes" in str(e)
     assert "returned str" in str(e)
 
     with pytest.raises(TypeError) as e:
-        pedalboard.io.ReadableAudioFile(stream)
+        pedalboard.io.ReadableAudioFile(stream)  # type: ignore
 
     assert "expected to return bytes" in str(e)
     assert "returned str" in str(e)
@@ -600,19 +608,22 @@ def test_read_from_non_bytes_stream(extension: str):
 def test_write_to_non_bytes_stream(extension: str):
     stream = io.StringIO()
 
+    expected_message = None
+
     try:
-        stream.write(b"")
+        stream.write(b"")  # type: ignore
     except TypeError as e:
         expected_message = e.args[0]
+    assert expected_message is not None
 
     with pytest.raises(TypeError) as e:
-        with pedalboard.io.AudioFile(stream, "w", 44100, 2, format=extension) as af:
+        with pedalboard.io.AudioFile(stream, "w", 44100, 2, format=extension) as af:  # type: ignore
             af.write(cached_rand(1, 2))
 
     assert expected_message in str(e)
 
     with pytest.raises(TypeError) as e:
-        with pedalboard.io.WriteableAudioFile(stream, 44100, 2, format=extension) as af:
+        with pedalboard.io.WriteableAudioFile(stream, 44100, 2, format=extension) as af:  # type: ignore
             af.write(cached_rand(1, 2))
 
     assert expected_message in str(e)
@@ -829,7 +840,7 @@ def test_write_to_seekable_stream(
 @pytest.mark.parametrize("samplerate", [32000, 44100, 48000])
 @pytest.mark.parametrize("num_channels", [1, 2])
 def test_write_twice_overwrites(
-    tmp_path: pathlib.Path, extension: str, samplerate: float, num_channels: int
+    tmp_path: pathlib.Path, extension: str, samplerate: int, num_channels: int
 ):
     filename = str(tmp_path / f"test{extension}")
     original_audio = np.zeros((num_channels, samplerate))
@@ -925,9 +936,10 @@ def test_write_matches_encode(
         assert encoded_output == stream.getvalue()
     else:
         # Ogg files contain some randomness when encoded, but should decode identically:
-        with pedalboard.io.AudioFile(
-            io.BytesIO(encoded_output)
-        ) as encoded_f, pedalboard.io.AudioFile(stream) as streamed_f:
+        with (
+            pedalboard.io.AudioFile(io.BytesIO(encoded_output)) as encoded_f,
+            pedalboard.io.AudioFile(stream) as streamed_f,
+        ):
             assert encoded_f.samplerate == streamed_f.samplerate
             assert encoded_f.num_channels == streamed_f.num_channels
             assert encoded_f.frames == streamed_f.frames
@@ -986,9 +998,9 @@ def test_swapped_parameter_exception(tmp_path: pathlib.Path, extension: str, sam
     filename = str(tmp_path / f"test{extension}")
     with pytest.raises(ValueError) as e:
         pedalboard.io.WriteableAudioFile(filename, samplerate=1, num_channels=samplerate)
-    assert "reversing" in str(
-        e
-    ), "Expected exception to include details about reversing parameters."
+    assert "reversing" in str(e), (
+        "Expected exception to include details about reversing parameters."
+    )
 
 
 @pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.uint32, np.uint64])
@@ -1278,6 +1290,69 @@ def test_real_mp3_parsing_with_no_channels():
         assert f.read(f.frames).shape == (0, 0)
 
 
+def test_mp3_in_wav_format():
+    """
+    Test reading WAV files that contain MP3-compressed audio data
+    (WAVE_FORMAT_MPEGLAYER3, format tag 0x55).
+
+    This is a valid but unusual format where a WAV container holds MP3 data.
+    Some audio software produces files in this format.
+    """
+    filename = os.path.join(os.path.dirname(__file__), "audio", "correct", "mp3_in_wav.wav")
+    with pedalboard.io.AudioFile(filename) as f:
+        assert f.samplerate == 44100
+        assert f.num_channels == 1
+        assert f.frames >= 44100  # At least 1 second of audio
+
+        # Read the audio and verify it's not silent
+        audio = f.read(f.frames)
+        assert audio.shape[0] == 1
+        assert np.amax(np.abs(audio)) > 0.1  # Should have actual audio content
+
+
+@pytest.mark.parametrize(
+    "filename,expected_dtype",
+    [
+        ("adpcm_ms.wav", "float32"),  # Microsoft ADPCM (format tag 0x0002)
+        ("adpcm_ima.wav", "float32"),  # IMA ADPCM (format tag 0x0011)
+        ("alaw.wav", "float32"),  # A-law (format tag 0x0006)
+        ("mulaw.wav", "float32"),  # µ-law (format tag 0x0007)
+        ("float64.wav", "float64"),  # 64-bit float (format tag 0x0003, not supported by JUCE)
+    ],
+)
+def test_wav_formats_via_drwav(filename: str, expected_dtype: str):
+    """
+    Test reading WAV files with formats not natively supported by JUCE,
+    decoded via dr_wav: ADPCM, A-law, µ-law, and 64-bit float.
+
+    These are valid WAV files using formats common in telephony, older audio
+    software, embedded systems, and high-precision audio applications.
+    """
+    filepath = os.path.join(os.path.dirname(__file__), "audio", "correct", filename)
+    with pedalboard.io.AudioFile(filepath) as f:
+        assert f.samplerate == 44100
+        assert f.num_channels == 1
+        assert f.frames >= 44100  # At least 1 second of audio
+        assert f.file_dtype == expected_dtype
+
+        # Read the audio and verify it's not silent
+        audio = f.read(f.frames)
+        assert audio.shape[0] == 1
+        assert np.amax(np.abs(audio)) > 0.01  # Should have actual audio content
+
+
+def test_float64_read_raw_raises():
+    """
+    Test that read_raw() raises an informative exception for 64-bit float WAV files,
+    since returning the raw data would lose precision (dr_wav decodes to float32).
+    """
+    filepath = os.path.join(os.path.dirname(__file__), "audio", "correct", "float64.wav")
+    with pedalboard.io.AudioFile(filepath) as f:
+        assert f.file_dtype == "float64"
+        with pytest.raises(RuntimeError, match="64-bit floating-point"):
+            f.read_raw(1024)
+
+
 @pytest.mark.parametrize("samplerate", [44100, 32000])
 @pytest.mark.parametrize("chunk_size", [1, 2, 16])
 @pytest.mark.parametrize("target_samplerate", [44100, 32000, 22050, 1234.56])
@@ -1427,7 +1502,7 @@ def test_flac_files_have_seektable():
     buf.name = "test.flac"
     with pedalboard.io.AudioFile(buf, "w", 44100) as o:
         o.write(cached_rand(44100))
-    assert mutagen.File(buf).seektable, "Expected to write a FLAC seek table"
+    assert mutagen.File(buf).seektable, "Expected to write a FLAC seek table"  # type: ignore
 
 
 @pytest.mark.parametrize(
@@ -1460,12 +1535,12 @@ def test_22050Hz_mono_mp3(audio_filename: str, samplerate: float):
     "samplerate", [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]
 )
 @pytest.mark.parametrize("num_channels", [1, 2])
-def test_mp3_at_all_samplerates(quality: str, samplerate: float, num_channels: int):
+def test_mp3_at_all_samplerates(quality: str, samplerate: int, num_channels: int):
     secs = 2
     # Make an audio signal that is equal parts noise and silence to make sure
     # we end up with a mixture of bitrates in the file:
     signal = np.concatenate(
-        [cached_rand(samplerate * secs) - 0.5, np.zeros(samplerate * secs)]
+        [cached_rand(samplerate * secs) - 0.5, np.zeros(samplerate * secs).astype(np.float32)]
     ).astype(np.float32)
     if num_channels == 2:
         signal = np.stack([signal] * num_channels)
@@ -1509,7 +1584,7 @@ def test_useful_exception_when_writing_to_unseekable_file_like():
     we throw a useful error message.
     """
 
-    class ILieAboutSeekability(object):
+    class ILieAboutSeekability(BinaryIO):
         def __init__(self):
             self.bytes_written = 0
 
@@ -1520,10 +1595,10 @@ def test_useful_exception_when_writing_to_unseekable_file_like():
         def seekable(self) -> bool:
             return True
 
-        def write(self, data: bytes) -> None:
+        def write(self, data: bytes) -> None:  # type: ignore
             self.bytes_written += len(data)
 
-        def seek(self, new_position: int) -> None:
+        def seek(self, new_position: int, whence: int = 0) -> int:
             raise NotImplementedError("What's a seek?")
 
         def tell(self) -> int:
@@ -1580,3 +1655,67 @@ def test_write_two_by_two_buffer_with_hint():
         f.write(np.zeros((2, 2), dtype=np.float32))
 
         assert f.tell() == 2
+
+
+class ErrnoTriggeringFileLike(BinaryIO):
+    """A file-like object that triggers errno to be set through real failed operations."""
+
+    def __init__(self, wrapped_file):
+        self._file = wrapped_file
+        # Create a path that definitely doesn't exist for triggering ENOENT
+        self._nonexistent_path = str(pathlib.Path("definitely_does_not_exist_12345.txt"))
+
+    def _trigger_errno(self):
+        # Try to open a non-existent file, which sets errno to ENOENT (2)
+        # We catch the exception but errno remains set
+        try:
+            open(self._nonexistent_path, "rb")
+        except FileNotFoundError:
+            pass  # Expected - errno is now set to ENOENT
+
+    def read(self, *args, **kwargs):
+        result = self._file.read(*args, **kwargs)
+        self._trigger_errno()
+        return result
+
+    def seek(self, *args, **kwargs):
+        result = self._file.seek(*args, **kwargs)
+        self._trigger_errno()
+        return result
+
+    def tell(self):
+        result = self._file.tell()
+        self._trigger_errno()
+        return result
+
+    def seekable(self):
+        result = self._file.seekable()
+        self._trigger_errno()
+        return result
+
+
+@pytest.mark.parametrize("format_name", ["wav", "ogg"])
+def test_errno_cleared_after_python_file_operations(format_name: str):
+    """
+    Regression test to ensure that errno values set by Python file-like objects
+    don't leak through and cause codec failures. Before the fix (ClearErrnoBeforeReturn),
+    errno values set during Python file operations would cause mysterious failures in
+    codecs like Ogg Vorbis that check errno.
+
+    This test creates a file-like wrapper that intentionally sets errno to a non-zero
+    value after each operation, simulating what might happen with certain third-party
+    libraries or file systems. The fix ensures these errno values are cleared before
+    returning to codec code.
+    """
+
+    buf = io.BytesIO()
+    buf.name = f"test.{format_name}"
+    with pedalboard.io.AudioFile(buf, "w", 44100, 2, format=format_name) as af:
+        af.write(np.random.rand(2, 44100))
+
+    # Add some random garbage past the end of the file to trigger the bug:
+    buf.write(b"\x00\x00")
+    buf.seek(0)
+
+    with pedalboard.io.AudioFile(ErrnoTriggeringFileLike(buf)) as af:
+        assert af.samplerate == 44100
